@@ -98,14 +98,14 @@ The **edit event** allows a plugin to describe the changes it wants to make to t
 export type EditDetailV2<E extends Edit = Edit> = {
   edit: E;
   title?: string;
-  sqash?: boolean;
+  squash?: boolean;
 }
 
 export type EditEventV2<E extends Edit = Edit> = CustomEvent<EditDetailV2<E>>;
 
 export type EditEventOptions = {
   title?: string;
-  sqash?: boolean;
+  squash?: boolean;
 }
 
 export function newEditEventV2<E extends Edit>(edit: E, options: EditEventOptions): EditEventV2<E> {
