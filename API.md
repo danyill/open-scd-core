@@ -268,7 +268,29 @@ declare global {
 
 ## Theming
 
-> CSS variables to be described...
+OpenSCD core sets the following CSS variables on the plugin:
+
+```css
+* {
+  --oscd-primary: var(--oscd-theme-primary, #2aa198);
+  --oscd-secondary: var(--oscd-theme-secondary, #6c71c4);
+  --oscd-error: var(--oscd-theme-error, #dc322f);
+
+  --oscd-base03: var(--oscd-theme-base03, #002b36);
+  --oscd-base02: var(--oscd-theme-base02, #073642);
+  --oscd-base01: var(--oscd-theme-base01, #586e75);
+  --oscd-base00: var(--oscd-theme-base00, #657b83);
+  --oscd-base0: var(--oscd-theme-base0, #839496);
+  --oscd-base1: var(--oscd-theme-base1, #93a1a1);
+  --oscd-base2: var(--oscd-theme-base2, #eee8d5);
+  --oscd-base3: var(--oscd-theme-base3, #fdf6e3);
+
+  --oscd-text-font: var(--oscd-theme-text-font, 'Roboto');
+  --oscd-icon-font: var(--oscd-theme-icon-font, 'Material Icons');
+}
+```
+
+It is expected that the fonts `--oscd-theme-text-font` and `--oscd-theme-icon-font` will be loaded in OpenSCD's `index.html` file. OpenSCD core does not load any fonts by itself.
 
 ## Missing
 
