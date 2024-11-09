@@ -86,6 +86,46 @@ describe('with editor plugins loaded', () => {
     const plugin = editor.shadowRoot?.querySelector('*[docname="test.xml"]');
     expect(plugin).to.have.property('editCount', 1);
   });
+
+  it('passes property docVersion', async () => {
+    editor.dispatchEvent(newOpenEvent(doc, 'test.xml'));
+    await editor.updateComplete;
+
+    const plugin = editor.shadowRoot?.querySelector('*[docname="test.xml"]');
+    expect(plugin).to.have.property('docVersion', 0);
+  });
+
+  it('updated passed docVersion property on edit events', async () => {
+    editor.dispatchEvent(newOpenEvent(doc, 'test.xml'));
+    await editor.updateComplete;
+
+    editor.dispatchEvent(
+      newEditEvent({
+        element: doc.querySelector('testdoc')!,
+        attributes: { name: 'someName' },
+      })
+    );
+    await editor.updateComplete;
+
+    const plugin = editor.shadowRoot?.querySelector('*[docname="test.xml"]');
+    expect(plugin).to.have.property('docVersion', 1);
+  });
+
+  it('passes property history', async () => {
+    editor.dispatchEvent(newOpenEvent(doc, 'test.xml'));
+    await editor.updateComplete;
+
+    const plugin = editor.shadowRoot?.querySelector('*[docname="test.xml"]');
+    expect(plugin).to.have.property('history');
+  });
+
+  it('passes property plugins', async () => {
+    editor.dispatchEvent(newOpenEvent(doc, 'test.xml'));
+    await editor.updateComplete;
+
+    const plugin = editor.shadowRoot?.querySelector('*[docname="test.xml"]');
+    expect(plugin).to.have.property('plugins');
+  });
 });
 
 describe('with menu plugins loaded', () => {
@@ -148,5 +188,45 @@ describe('with menu plugins loaded', () => {
 
     const plugin = editor.shadowRoot?.querySelector('*[docname="test.xml"]');
     expect(plugin).to.have.property('editCount', 1);
+  });
+
+  it('passes property docVersion', async () => {
+    editor.dispatchEvent(newOpenEvent(doc, 'test.xml'));
+    await editor.updateComplete;
+
+    const plugin = editor.shadowRoot?.querySelector('*[docname="test.xml"]');
+    expect(plugin).to.have.property('docVersion', 0);
+  });
+
+  it('updated passed docVersion property on edit events', async () => {
+    editor.dispatchEvent(newOpenEvent(doc, 'test.xml'));
+    await editor.updateComplete;
+
+    editor.dispatchEvent(
+      newEditEvent({
+        element: doc.querySelector('testdoc')!,
+        attributes: { name: 'someName' },
+      })
+    );
+    await editor.updateComplete;
+
+    const plugin = editor.shadowRoot?.querySelector('*[docname="test.xml"]');
+    expect(plugin).to.have.property('docVersion', 1);
+  });
+
+  it('passes property history', async () => {
+    editor.dispatchEvent(newOpenEvent(doc, 'test.xml'));
+    await editor.updateComplete;
+
+    const plugin = editor.shadowRoot?.querySelector('*[docname="test.xml"]');
+    expect(plugin).to.have.property('history');
+  });
+
+  it('passes property plugins', async () => {
+    editor.dispatchEvent(newOpenEvent(doc, 'test.xml'));
+    await editor.updateComplete;
+
+    const plugin = editor.shadowRoot?.querySelector('*[docname="test.xml"]');
+    expect(plugin).to.have.property('plugins');
   });
 });

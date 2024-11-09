@@ -468,10 +468,14 @@ export class OpenSCD extends LitElement {
           </mwc-tab-bar>
           ${this.editor
             ? staticHtml`<${unsafeStatic(this.editor)} docName="${
-                this.docName || nothing
+                this.docName
               }" .doc=${this.doc} locale="${this.locale}" .docs=${
                 this.docs
-              } .editCount=${this.editCount}></${unsafeStatic(this.editor)}>`
+              } .editCount=${this.editCount} .docVersion=${
+                this.docVersion
+              } .history=${this.history} .plugins=${
+                this.plugins
+              }></${unsafeStatic(this.editor)}>`
             : nothing}
         </mwc-top-app-bar-fixed>
       </mwc-drawer>
@@ -502,9 +506,11 @@ export class OpenSCD extends LitElement {
               this.docName
             }" .doc=${this.doc} locale="${this.locale}" .docs=${
               this.docs
-            } .editCount=${this.editCount}></${unsafeStatic(
-              pluginTag(plugin.src)
-            )}>`
+            } .editCount=${this.editCount} .docVersion=${
+              this.docVersion
+            } .history=${this.history} .plugins=${
+              this.plugins
+            } ></${unsafeStatic(pluginTag(plugin.src))}>`
         )}
       </aside>`;
   }
