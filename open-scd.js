@@ -32375,6 +32375,11 @@ OpenSCD.styles = i$5 `
       flex-direction: column;
     }
 
+    mwc-tab {
+      background-color: var(--oscd-primary);
+      --mdc-theme-primary: var(--mdc-theme-on-primary);
+    }
+
     * {
       --oscd-accent-yellow: var(--oscd-theme-accent-yellow, #b58900);
       --oscd-accent-orange: var(--oscd-theme-accent-orange, #cb4b16);
