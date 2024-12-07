@@ -30680,6 +30680,7 @@ function handleEdit(edit) {
         return handleSetTextContent(edit);
     if (isComplex$1(edit))
         return edit.map((edit) => handleEdit(edit)).reverse();
+    console.error(`Invalid edit provided: ${edit}`);
     return [];
 }
 
