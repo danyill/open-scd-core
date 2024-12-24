@@ -206,6 +206,22 @@ describe('Editing Element', () => {
     expect(editor.docName).to.equal('test.scd');
   });
 
+  it('refreshes a document with the same name as one already opened on OpenDocEvent', async () => {
+    editor.dispatchEvent(newOpenEvent(sclDoc, 'test.scd'));
+    const firstUpdate = editor.updateComplete;
+    await firstUpdate;
+    sclDoc = new DOMParser().parseFromString(
+      util.sclDocString,
+      'application/xml'
+    );
+    editor.dispatchEvent(newOpenEvent(sclDoc, 'test.scd'));
+    const secondUpdate = editor.updateComplete;
+    await secondUpdate;
+    expect(firstUpdate).to.not.equal(secondUpdate);
+    expect(editor.doc).to.equal(sclDoc);
+    expect(editor.docName).to.equal('test.scd');
+  });
+
   it('inserts an element on Insert', () => {
     const parent = sclDoc.documentElement;
     const node = sclDoc.createElement('test');
