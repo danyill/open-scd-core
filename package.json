@@ -37,7 +37,7 @@
     "test:watch": "npm run build && concurrently -k -r \"tsc -b --watch --preserveWatchOutput\" \"wtr --watch --coverage\"",
     "test:update": "npm run build && wtr --update-visual-baseline",
     "analyze": "cem analyze --litelement",
-    "deploy": "npm run bundle && npm run doc && gh-pages --dist 'dist' --branch 'deploy'",
+    "deploy": "npm run bundle && npm run doc && gh-pages --repo https://github.com/danyill/open-scd-core --dist 'dist' --branch 'dev-preview-deploy'",
     "build": "npm run extract && npm run localize && npm run compile",
     "compile": "tsc -b",
     "bundle": "rimraf dist && rollup -c rollup.config.js",
