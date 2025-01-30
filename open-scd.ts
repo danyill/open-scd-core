@@ -72,7 +72,7 @@ type Control = {
 
 type RenderedPlugin = Control & { tagName: string };
 
-type LocaleTag = typeof allLocales[number];
+type LocaleTag = (typeof allLocales)[number];
 
 const { getLocale, setLocale } = configureLocalization({
   sourceLocale,
@@ -234,8 +234,9 @@ export class OpenSCD extends LitElement {
   }
 
   handleOpenDoc({ detail: { docName, doc } }: OpenEvent) {
-    this.docs[docName] = doc;
-    if (this.isEditable(docName)) this.docName = docName;
+    this.docName = docName;
+    this.docs[this.docName] = doc;
+    this.requestUpdate();
   }
 
   updateVersion(): void {
@@ -410,7 +411,7 @@ export class OpenSCD extends LitElement {
               icon: plugin.icon,
               getName: () =>
                 plugin.translations?.[
-                  this.locale as typeof targetLocales[number]
+                  this.locale as (typeof targetLocales)[number]
                 ] || plugin.name,
               isDisabled: () => (plugin.requireDoc && !this.docName) ?? false,
               tagName: pluginTag(plugin.src),
@@ -433,7 +434,7 @@ export class OpenSCD extends LitElement {
               icon: plugin.icon,
               getName: () =>
                 plugin.translations?.[
-                  this.locale as typeof targetLocales[number]
+                  this.locale as (typeof targetLocales)[number]
                 ] || plugin.name,
               isDisabled: () => (plugin.requireDoc && !this.docName) ?? false,
               tagName: pluginTag(plugin.src),
