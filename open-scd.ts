@@ -207,6 +207,7 @@ export class OpenSCD extends LitElement {
   handleOpenDoc({ detail: { docName, doc } }: OpenEvent) {
     this.docName = docName;
     this.docs[this.docName] = doc;
+    this.requestUpdate();
   }
 
   updateVersion(): void {
