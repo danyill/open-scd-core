@@ -22,6 +22,15 @@
   <source>Collapse sidebar</source>
   <target>Menü einklappen</target>
 </trans-unit>
+<trans-unit id="s1fdaf64fa6e8cc18">
+  <source>Unpin plugin</source>
+</trans-unit>
+<trans-unit id="s8fe73d94a0fd39af">
+  <source>Pin plugin</source>
+</trans-unit>
+<trans-unit id="s44851a8adf059eef">
+  <source>Pinned</source>
+</trans-unit>
 </body>
 </file>
 </xliff>

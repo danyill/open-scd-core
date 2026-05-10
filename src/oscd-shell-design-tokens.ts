@@ -254,6 +254,12 @@ export const oscdShellDesignTokens = css`
     );
     --side-panel-width: var(--editor-plugins-panel-width);
 
+    /* Breadcrumb */
+    --oscd-shell-editor-breadcrumb-color: var(
+      --oscd-shell-editor-breadcrumb-color,
+      var(--oscd-secondary)
+    );
+
     /* Main editor container */
     --editor-background-color: var(
       --oscd-shell-editor-background-color,

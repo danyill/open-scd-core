@@ -5,6 +5,7 @@ import { localized, msg } from '@lit/localize';
 import { classMap } from 'lit/directives/class-map.js';
 import { ifDefined } from 'lit/directives/if-defined.js';
 import { styleMap } from 'lit/directives/style-map.js';
+import { createRef, ref } from 'lit/directives/ref.js';
 
 import { OscdIcon } from '@omicronenergy/oscd-ui/icon/OscdIcon.js';
 import { OscdIconButton } from '@omicronenergy/oscd-ui/iconbutton/OscdIconButton.js';
@@ -41,6 +42,18 @@ interface FlatPlugin {
   flatIndex: number;
 }
 
+type NavigableItem =
+  | { kind: 'plugin'; plugin: PluginEntry; flatIndex: number }
+  | { kind: 'group'; groupName: string }
+  | { kind: 'pinned' };
+
+interface ShortcutEntry {
+  key: string;
+  type: 'pinned' | 'group' | 'plugin';
+  flatIndex: number;
+  groupName?: string;
+}
+
 const PINNED_GROUP_KEY = '__pinned__';
 
 @localized()
@@ -72,6 +85,36 @@ export class EditorPluginsPanel extends ScopedElementsMixin(LitElement) {
   @state()
   private hoveredRect: DOMRect | null = null;
 
+  @state()
+  private collapsedGroups: Set<string> = loadSet(
+    'editorsPanel.collapsedGroups',
+  );
+
+  @state()
+  private pinnedCollapsed: boolean =
+    localStorage.getItem('editorsPanel.pinnedCollapsed') === 'true';
+
+  @state()
+  private searchQuery: string = '';
+
+  @state()
+  private showShortcuts = false;
+
+  @state()
+  private activeShortcutGroup: string | null = null;
+
+  @state()
+  private shortcutNumberBuffer = '';
+
+  @state()
+  private focusedItem: NavigableItem | null = null;
+
+  private _shortcutConfirmTimer: ReturnType<typeof setTimeout> | null = null;
+
+  private searchInputRef = createRef<HTMLInputElement>();
+
+  private editorsListRef = createRef<HTMLElement>();
+
   private _hoverTimer: ReturnType<typeof setTimeout> | null = null;
 
   private isExpanded: boolean =
@@ -87,6 +130,13 @@ export class EditorPluginsPanel extends ScopedElementsMixin(LitElement) {
     this.isExpanded = value;
     localStorage.setItem('editorsPanel.expanded', value.toString());
     this.requestUpdate('expanded', old);
+    this.dispatchEvent(
+      new CustomEvent('panel-expanded-change', {
+        detail: { expanded: value },
+        bubbles: true,
+        composed: true,
+      }),
+    );
   }
 
   disconnectedCallback() {
@@ -95,6 +145,325 @@ export class EditorPluginsPanel extends ScopedElementsMixin(LitElement) {
       clearTimeout(this._hoverTimer);
       this._hoverTimer = null;
     }
+    if (this._shortcutConfirmTimer) {
+      clearTimeout(this._shortcutConfirmTimer);
+      this._shortcutConfirmTimer = null;
+    }
+    document.removeEventListener('keydown', this.handleKeyDown);
+    document.removeEventListener('keyup', this.handleKeyUp);
+    this.removeEventListener('click', this.handleOutsideClick);
+  }
+
+  private resetShortcuts() {
+    this.showShortcuts = false;
+    this.activeShortcutGroup = null;
+    this.shortcutNumberBuffer = '';
+    this.focusedItem = null;
+    if (this._shortcutConfirmTimer) {
+      clearTimeout(this._shortcutConfirmTimer);
+      this._shortcutConfirmTimer = null;
+    }
+    if (this._wasCollapsedForShortcut) {
+      this.expanded = false;
+      this._wasCollapsedForShortcut = false;
+    }
+  }
+
+  private collapseAfterSearchIfNeeded() {
+    if (this._wasCollapsedForSearch) {
+      this._wasCollapsedForSearch = false;
+      this.expanded = false;
+    }
+  }
+
+  private _wasCollapsedForShortcut = false;
+
+  private _wasCollapsedForSearch = false;
+
+  private confirmShortcutSelection() {
+    if (this.activeShortcutGroup === null || this.shortcutNumberBuffer === '') {
+      this.resetShortcuts();
+      return;
+    }
+    const num = parseInt(this.shortcutNumberBuffer, 10);
+    this.shortcutNumberBuffer = '';
+    if (num < 1) {
+      this.resetShortcuts();
+      return;
+    }
+    const entry = this.shortcutMap.find(
+      s => s.key === this.activeShortcutGroup,
+    );
+    if (entry) {
+      if (entry.type === 'pinned') {
+        const pinned = this.pinnedPluginsList;
+        if (num - 1 < pinned.length) {
+          this.selectEditor(
+            pinned[num - 1].plugin,
+            pinned[num - 1].flatIndex,
+            true,
+          );
+        }
+      } else if (entry.type === 'group' && entry.groupName) {
+        const groupPlugins = this.getGroupFlatPlugins(entry.groupName);
+        if (num - 1 < groupPlugins.length) {
+          this.selectEditor(
+            groupPlugins[num - 1].plugin,
+            groupPlugins[num - 1].flatIndex,
+            false,
+          );
+        }
+      }
+    }
+    this.resetShortcuts();
+  }
+
+  private navigatePlugins(direction: 'ArrowDown' | 'ArrowUp') {
+    const items = this.visibleNavigableItems;
+    if (items.length === 0) {
+      return;
+    }
+    if (this.focusedItem === null) {
+      this.focusedItem =
+        direction === 'ArrowDown' ? items[0] : items[items.length - 1];
+    } else {
+      const currentPos = items.findIndex(item =>
+        this.navigableItemsEqual(item, this.focusedItem),
+      );
+      const nextPos =
+        direction === 'ArrowDown'
+          ? (currentPos + 1) % items.length
+          : (currentPos - 1 + items.length) % items.length;
+      this.focusedItem = items[nextPos >= 0 ? nextPos : 0];
+    }
+    this.scrollFocusedIntoView();
+  }
+
+  private confirmFocusedItem() {
+    if (this.focusedItem === null) {
+      return;
+    }
+    if (this.focusedItem.kind === 'plugin') {
+      this.selectEditor(
+        this.focusedItem.plugin,
+        this.focusedItem.flatIndex,
+        false,
+      );
+    } else if (this.focusedItem.kind === 'group') {
+      if (this.collapsedGroups.has(this.focusedItem.groupName)) {
+        const groupPlugins = this.getGroupFlatPlugins(
+          this.focusedItem.groupName,
+        );
+        this.toggleGroupCollapse(this.focusedItem.groupName);
+        if (groupPlugins.length > 0) {
+          this.focusedItem = {
+            kind: 'plugin',
+            plugin: groupPlugins[0].plugin,
+            flatIndex: groupPlugins[0].flatIndex,
+          };
+          return;
+        }
+      }
+    } else if (this.focusedItem.kind === 'pinned') {
+      this.pinnedCollapsed = false;
+      localStorage.setItem(
+        'editorsPanel.pinnedCollapsed',
+        this.pinnedCollapsed.toString(),
+      );
+      const pinnedPlugins = this.pinnedPluginsList;
+      if (pinnedPlugins.length > 0) {
+        this.focusedItem = {
+          kind: 'plugin',
+          plugin: pinnedPlugins[0].plugin,
+          flatIndex: pinnedPlugins[0].flatIndex,
+        };
+        return;
+      }
+    }
+    this.focusedItem = null;
+  }
+
+  // eslint-disable-next-line class-methods-use-this
+  private navigableItemsEqual(
+    a: NavigableItem | null,
+    b: NavigableItem | null,
+  ): boolean {
+    if (a === null || b === null) {
+      return a === b;
+    }
+    if (a.kind !== b.kind) {
+      return false;
+    }
+    if (a.kind === 'plugin' && b.kind === 'plugin') {
+      return a.flatIndex === b.flatIndex;
+    }
+    if (a.kind === 'group' && b.kind === 'group') {
+      return a.groupName === b.groupName;
+    }
+    return a.kind === 'pinned' && b.kind === 'pinned';
+  }
+
+  private handleEditorListKeyDown(e: KeyboardEvent) {
+    const items = this.visibleNavigableItems;
+    if (items.length === 0) {
+      return;
+    }
+
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      this.navigatePlugins(e.key);
+      return;
+    }
+
+    if ((e.key === 'Enter' || e.key === ' ') && this.focusedItem !== null) {
+      e.preventDefault();
+      this.confirmFocusedItem();
+      return;
+    }
+
+    if (e.key === 'Escape') {
+      this.focusedItem = null;
+    }
+  }
+
+  private scrollFocusedIntoView() {
+    if (this.focusedItem === null) {
+      return;
+    }
+    requestAnimationFrame(() => {
+      const sel =
+        this.focusedItem!.kind === 'plugin'
+          ? `.plugin-item[data-flat-index="${this.focusedItem!.flatIndex}"]`
+          : this.focusedItem!.kind === 'group'
+            ? `.group-header[data-group-name="${this.focusedItem!.groupName}"]`
+            : '.group-header[data-group-name="__pinned__"]';
+      const el = this.renderRoot?.querySelector(sel);
+      el?.scrollIntoView({ block: 'nearest' });
+    });
+  }
+
+  private handleKeyDown = async (e: KeyboardEvent) => {
+    // Don't capture shortcuts while typing in the search input
+    if (
+      (e.target as HTMLElement)?.tagName === 'INPUT' ||
+      (e.target as HTMLElement)?.tagName === 'TEXTAREA'
+    ) {
+      return;
+    }
+
+    // Ctrl held down → show all shortcut badges
+    if (e.key === 'Control') {
+      this.showShortcuts = true;
+      this.activeShortcutGroup = null;
+      this.shortcutNumberBuffer = '';
+      return;
+    }
+
+    // If a group is selected, listen for digit keys without requiring Ctrl
+    if (this.activeShortcutGroup !== null) {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        this.resetShortcuts();
+        return;
+      }
+      if (e.key >= '0' && e.key <= '9') {
+        e.preventDefault();
+        // Leading zero is not valid
+        if (this.shortcutNumberBuffer === '' && e.key === '0') {
+          return;
+        }
+        this.shortcutNumberBuffer += e.key;
+        // Restart the confirmation timer
+        if (this._shortcutConfirmTimer) {
+          clearTimeout(this._shortcutConfirmTimer);
+        }
+        // Auto-confirm after 600ms of no further digits
+        this._shortcutConfirmTimer = setTimeout(() => {
+          this.confirmShortcutSelection();
+        }, 600);
+        return;
+      }
+      // Enter confirms the current number
+      if (e.key === 'Enter' && this.shortcutNumberBuffer !== '') {
+        e.preventDefault();
+        this.confirmShortcutSelection();
+        return;
+      }
+      // Any other key cancels
+      e.preventDefault();
+      this.resetShortcuts();
+      return;
+    }
+
+    if (!e.ctrlKey && !e.metaKey) {
+      return;
+    }
+
+    // Ctrl+F → focus search (expand sidebar if needed)
+    if (e.key === 'f' || e.key === 'F') {
+      e.preventDefault();
+      this.showShortcuts = true;
+      if (!this.expanded) {
+        this._wasCollapsedForSearch = true;
+        this.expanded = true;
+      }
+      if (!this.expanded || this._wasCollapsedForSearch) {
+        await this.updateComplete;
+      }
+      (this.searchInputRef.value as HTMLInputElement | undefined)?.focus();
+      return;
+    }
+
+    // Ctrl+letter → select group or ungrouped plugin
+    const letter = e.key.toUpperCase();
+    if (letter.length === 1 && letter >= 'A' && letter <= 'Z') {
+      e.preventDefault();
+      const entry = this.shortcutMap.find(s => s.key === letter);
+      if (entry) {
+        if (entry.type === 'plugin') {
+          this.selectEditor(
+            (this.editors[entry.flatIndex] as PluginEntry) ??
+              this.allFlatPlugins.find(f => f.flatIndex === entry.flatIndex)
+                ?.plugin ??
+              ({ name: '', tagName: '' } as PluginEntry),
+            entry.flatIndex,
+            false,
+          );
+          this.resetShortcuts();
+        } else {
+          // Group or pinned: enter number-input mode
+          this.activeShortcutGroup = letter;
+          this.shortcutNumberBuffer = '';
+          this.showShortcuts = true;
+          // Expand sidebar if collapsed so user can see plugin numbers
+          if (!this.expanded) {
+            this._wasCollapsedForShortcut = true;
+            this.expanded = true;
+          }
+          // Release Ctrl doesn't dismiss — we're in number-input mode now
+        }
+      }
+    }
+  };
+
+  private handleKeyUp = (e: KeyboardEvent) => {
+    // Only dismiss on Ctrl release if we're NOT in number-input mode
+    if (e.key === 'Control' && this.activeShortcutGroup === null) {
+      this.resetShortcuts();
+    }
+  };
+
+  private handleOutsideClick = () => {
+    if (this.activeShortcutGroup !== null || this.showShortcuts) {
+      this.resetShortcuts();
+    }
+  };
+
+  connectedCallback() {
+    super.connectedCallback();
+    document.addEventListener('keydown', this.handleKeyDown);
+    document.addEventListener('keyup', this.handleKeyUp);
+    this.addEventListener('click', this.handleOutsideClick);
   }
 
   // eslint-disable-next-line class-methods-use-this
@@ -139,6 +508,71 @@ export class EditorPluginsPanel extends ScopedElementsMixin(LitElement) {
     return [];
   }
 
+  private get visibleNavigableItems(): NavigableItem[] {
+    if (!this.isSearching) {
+      const result: NavigableItem[] = [];
+      if (this.pinnedPluginsList.length > 0 && this.pinnedCollapsed) {
+        result.push({ kind: 'pinned' });
+      } else if (this.pinnedPluginsList.length > 0) {
+        for (const { plugin, flatIndex } of this.pinnedPluginsList) {
+          result.push({ kind: 'plugin', plugin, flatIndex });
+        }
+      }
+      let fi = 0;
+      for (const item of this.editors) {
+        if (isPluginGroup(item)) {
+          const g = item as ResolvedPluginGroup;
+          if (this.collapsedGroups.has(g.name)) {
+            result.push({ kind: 'group', groupName: g.name });
+            fi += g.plugins.length;
+          } else {
+            for (const p of g.plugins) {
+              result.push({ kind: 'plugin', plugin: p, flatIndex: fi++ });
+            }
+          }
+        } else {
+          result.push({
+            kind: 'plugin',
+            plugin: item as PluginEntry,
+            flatIndex: fi++,
+          });
+        }
+      }
+      return result;
+    }
+    const q = this.searchQuery.trim().toLowerCase();
+    const result: NavigableItem[] = [];
+    let fi = 0;
+    for (const item of this.editors) {
+      if (isPluginGroup(item)) {
+        const g = item as ResolvedPluginGroup;
+        const groupMatches = EditorPluginsPanel.matchesSearch(
+          this.pluginLabel(g),
+          q,
+        );
+        if (groupMatches) {
+          for (const p of g.plugins) {
+            result.push({ kind: 'plugin', plugin: p, flatIndex: fi++ });
+          }
+        } else {
+          for (const p of g.plugins) {
+            if (EditorPluginsPanel.matchesSearch(this.pluginLabel(p), q)) {
+              result.push({ kind: 'plugin', plugin: p, flatIndex: fi });
+            }
+            fi++;
+          }
+        }
+      } else {
+        const p = item as PluginEntry;
+        if (EditorPluginsPanel.matchesSearch(this.pluginLabel(p), q)) {
+          result.push({ kind: 'plugin', plugin: p, flatIndex: fi });
+        }
+        fi++;
+      }
+    }
+    return result;
+  }
+
   private togglePluginPin(plugin: PluginEntry) {
     const key = this.pluginKey(plugin);
     const next = new Set(this.pinnedPluginKeys);
@@ -153,6 +587,217 @@ export class EditorPluginsPanel extends ScopedElementsMixin(LitElement) {
 
   private toggleExpanded() {
     this.expanded = !this.expanded;
+  }
+
+  private get hasGroups(): boolean {
+    return (
+      this.pinnedPluginsList.length > 0 ||
+      this.editors.some(item => isPluginGroup(item))
+    );
+  }
+
+  private get allSectionsCollapsed(): boolean {
+    const pinnedCollapsed =
+      this.pinnedPluginsList.length > 0 ? this.pinnedCollapsed : true;
+    const groups = this.editors.filter(isPluginGroup) as ResolvedPluginGroup[];
+    const groupsCollapsed =
+      groups.length > 0
+        ? groups.every(g => this.collapsedGroups.has(g.name))
+        : true;
+    const ungroupedCount = this.editors.filter(i => !isPluginGroup(i)).length;
+    return (
+      pinnedCollapsed &&
+      groupsCollapsed &&
+      (groups.length > 0 ||
+        this.pinnedPluginsList.length > 0 ||
+        ungroupedCount === 0)
+    );
+  }
+
+  private toggleGroupCollapse(groupName: string) {
+    const next = new Set(this.collapsedGroups);
+    if (next.has(groupName)) {
+      next.delete(groupName);
+    } else {
+      next.add(groupName);
+    }
+    this.collapsedGroups = next;
+    saveSet('editorsPanel.collapsedGroups', next);
+  }
+
+  private toggleAllGroups() {
+    if (this.allSectionsCollapsed) {
+      this.pinnedCollapsed = false;
+      localStorage.setItem('editorsPanel.pinnedCollapsed', 'false');
+      this.collapsedGroups = new Set();
+      saveSet('editorsPanel.collapsedGroups', new Set());
+    } else {
+      this.pinnedCollapsed = true;
+      localStorage.setItem('editorsPanel.pinnedCollapsed', 'true');
+      const all = new Set<string>();
+      for (const item of this.editors) {
+        if (isPluginGroup(item)) {
+          all.add((item as ResolvedPluginGroup).name);
+        }
+      }
+      this.collapsedGroups = all;
+      saveSet('editorsPanel.collapsedGroups', all);
+    }
+  }
+
+  private clearSearch() {
+    this.searchQuery = '';
+    (this.searchInputRef.value as HTMLInputElement | undefined)?.focus();
+  }
+
+  private get shortcutMap(): ShortcutEntry[] {
+    const entries: ShortcutEntry[] = [];
+    let letterIndex = 0;
+    const pinnedPlugins = this.pinnedPluginsList;
+    if (pinnedPlugins.length > 0) {
+      // Skip 'F' — reserved for search
+      if (letterIndex === 5) {
+        letterIndex++;
+      }
+      entries.push({
+        key: String.fromCharCode(65 + letterIndex),
+        type: 'pinned',
+        flatIndex: pinnedPlugins[0].flatIndex,
+        groupName: '__pinned__',
+      });
+      letterIndex++;
+    }
+    let flatIndex = 0;
+    for (const item of this.editors) {
+      if (isPluginGroup(item)) {
+        const g = item as ResolvedPluginGroup;
+        if (letterIndex < 26) {
+          if (letterIndex === 5) {
+            letterIndex++;
+          } // Skip 'F'
+          entries.push({
+            key: String.fromCharCode(65 + letterIndex),
+            type: 'group',
+            flatIndex,
+            groupName: g.name,
+          });
+          letterIndex++;
+        }
+        flatIndex += g.plugins.length;
+      } else {
+        if (letterIndex < 26) {
+          if (letterIndex === 5) {
+            letterIndex++;
+          } // Skip 'F'
+          entries.push({
+            key: String.fromCharCode(65 + letterIndex),
+            type: 'plugin',
+            flatIndex,
+          });
+          letterIndex++;
+        }
+        flatIndex++;
+      }
+    }
+    return entries;
+  }
+
+  private static renderShortcutBadge(label: string): TemplateResult {
+    return html`<span class="shortcut-badge">${label}</span>`;
+  }
+
+  private static levenshteinAtMost1(a: string, b: string): boolean {
+    if (Math.abs(a.length - b.length) > 1) {
+      return false;
+    }
+    if (a === b) {
+      return true;
+    }
+    const la = a.length;
+    const lb = b.length;
+    if (la === 0) {
+      return lb <= 1;
+    }
+    if (lb === 0) {
+      return la <= 1;
+    }
+    const row = new Array(la + 1);
+    for (let i = 0; i <= la; i++) {
+      row[i] = i;
+    }
+    for (let j = 1; j <= lb; j++) {
+      let prev = row[0];
+      row[0] = j;
+      let rowMin = j;
+      for (let i = 1; i <= la; i++) {
+        const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+        const val = Math.min(prev + cost, row[i] + 1, row[i - 1] + 1);
+        prev = row[i];
+        row[i] = val;
+        if (val < rowMin) {
+          rowMin = val;
+        }
+      }
+      if (rowMin > 1) {
+        return false;
+      }
+    }
+    return row[la] <= 1;
+  }
+
+  private static matchesSearch(text: string, query: string): boolean {
+    const lower = text.toLowerCase();
+    if (lower.includes(query)) {
+      return true;
+    }
+    const matchLengths = [query.length, query.length + 1];
+    const tokens = lower.split(/[\s\-_/]+/);
+    for (const token of tokens) {
+      if (token.length === 0) {
+        continue;
+      }
+      if (EditorPluginsPanel.levenshteinAtMost1(query, token)) {
+        return true;
+      }
+      for (let i = 0; i <= token.length - query.length + 1; i++) {
+        for (const len of matchLengths) {
+          if (i + len > token.length) {
+            continue;
+          }
+          const sub = token.substring(i, i + len);
+          if (EditorPluginsPanel.levenshteinAtMost1(query, sub)) {
+            return true;
+          }
+        }
+      }
+    }
+    return false;
+  }
+
+  private get filteredEditors(): EditorPluginEntry[] {
+    const q = this.searchQuery.trim().toLowerCase();
+    if (!q) {
+      return this.editors;
+    }
+    return this.editors.filter(item => {
+      if (isPluginGroup(item)) {
+        const g = item as ResolvedPluginGroup;
+        if (EditorPluginsPanel.matchesSearch(this.pluginLabel(g), q)) {
+          return true;
+        }
+        return g.plugins.some(p =>
+          EditorPluginsPanel.matchesSearch(this.pluginLabel(p), q),
+        );
+      }
+      return EditorPluginsPanel.matchesSearch(
+        this.pluginLabel(item as PluginEntry),
+        q,
+      );
+    });
+  }
+
+  private get isSearching(): boolean {
+    return this.searchQuery.trim().length > 0;
   }
 
   private showPopup(groupName: string, el: Element) {
@@ -185,6 +830,9 @@ export class EditorPluginsPanel extends ScopedElementsMixin(LitElement) {
 
   private selectEditor(editor: PluginEntry, index: number, fromPinned = false) {
     this.activeFromPinned = fromPinned;
+    this.searchQuery = '';
+    this.focusedItem = null;
+    this.collapseAfterSearchIfNeeded();
     this.dispatchEvent(
       new CustomEvent('editor-select', {
         detail: { editor, index },
@@ -213,19 +861,77 @@ export class EditorPluginsPanel extends ScopedElementsMixin(LitElement) {
   private renderPluginItem(
     plugin: PluginEntry,
     flatIndex: number,
-    opts: { inGroup?: boolean; inPinnedGroup?: boolean } = {},
+    opts: {
+      inGroup?: boolean;
+      inPinnedGroup?: boolean;
+      groupPosition?: number;
+    } = {},
   ): TemplateResult {
-    // Plugin item is highlighted wherever it appears when active
     const isActive = this.editorIndex === flatIndex;
     const tooltip = !this.expanded ? this.pluginLabel(plugin) : undefined;
     const isPinned = this.pinnedPluginKeys.has(this.pluginKey(plugin));
+
+    let shortcutBadge: TemplateResult | typeof nothing = nothing;
+    let shortcutHighlight = false;
+    if (this.activeShortcutGroup !== null) {
+      // Level 2: only show badges within the selected group
+      const groupEntry = this.shortcutMap.find(
+        s => s.key === this.activeShortcutGroup,
+      );
+      if (groupEntry) {
+        if (
+          (groupEntry.type === 'pinned' && opts.inPinnedGroup) ||
+          (groupEntry.type === 'group' && opts.inGroup && groupEntry.groupName)
+        ) {
+          let itemList: FlatPlugin[];
+          if (groupEntry.type === 'pinned') {
+            itemList = this.pinnedPluginsList;
+          } else if (groupEntry.groupName) {
+            itemList = this.getGroupFlatPlugins(groupEntry.groupName);
+          } else {
+            itemList = [];
+          }
+          const idx = itemList.findIndex(f => f.flatIndex === flatIndex);
+          if (idx >= 0) {
+            shortcutBadge = EditorPluginsPanel.renderShortcutBadge(
+              String(idx + 1),
+            );
+            if (
+              this.shortcutNumberBuffer !== '' &&
+              String(idx + 1).startsWith(this.shortcutNumberBuffer)
+            ) {
+              shortcutHighlight = true;
+            }
+          }
+        }
+      }
+    } else if (this.showShortcuts) {
+      // Level 1: Ctrl held, show letters on top-level items only
+      if (!opts.inGroup && !opts.inPinnedGroup) {
+        const entry = this.shortcutMap.find(
+          s => s.type === 'plugin' && s.flatIndex === flatIndex,
+        );
+        if (entry) {
+          shortcutBadge = EditorPluginsPanel.renderShortcutBadge(entry.key);
+        }
+      }
+      // Numbers inside groups are NOT shown at level 1 — only after selecting a group
+    }
+
+    const isFocused =
+      this.focusedItem?.kind === 'plugin' &&
+      this.focusedItem.flatIndex === flatIndex;
+
     return html`
       <div
         class=${classMap({
           'plugin-item': true,
           'plugin-item--active': isActive,
+          'plugin-item--focused': isFocused,
           'plugin-item--in-group': !!opts.inGroup,
+          'plugin-item--shortcut-target': shortcutHighlight,
         })}
+        data-flat-index=${flatIndex}
         role="button"
         tabindex="0"
         title=${ifDefined(tooltip)}
@@ -237,7 +943,9 @@ export class EditorPluginsPanel extends ScopedElementsMixin(LitElement) {
           }
         }}
       >
-        ${this.renderPluginIcon(plugin)}
+        <span class="shortcut-badge-container"
+          >${this.renderPluginIcon(plugin)}${shortcutBadge}</span
+        >
         ${this.expanded
           ? html`
               <span class="plugin-item-label">${this.pluginLabel(plugin)}</span>
@@ -266,40 +974,94 @@ export class EditorPluginsPanel extends ScopedElementsMixin(LitElement) {
       this.activeFromPinned &&
       flatPlugins.some(({ flatIndex }) => flatIndex === this.editorIndex);
 
+    const isPinnedInShortcutGroup =
+      this.activeShortcutGroup !== null &&
+      this.shortcutMap.find(s => s.key === this.activeShortcutGroup)?.type ===
+        'pinned';
+    const isCollapsed =
+      !this.isSearching && this.pinnedCollapsed && !isPinnedInShortcutGroup;
+    const pinnedShortcut =
+      this.showShortcuts && this.activeShortcutGroup === null
+        ? this.shortcutMap.find(s => s.type === 'pinned')
+        : this.activeShortcutGroup !== null
+          ? this.shortcutMap.find(
+              s => s.key === this.activeShortcutGroup && s.type === 'pinned',
+            )
+          : undefined;
+
     if (this.expanded) {
       return html`
         <div
           class=${classMap({
             'group-container': true,
             'group-container--inactive': !hasActiveChild,
+            'group-container--collapsed': isCollapsed,
           })}
         >
           <div
             class=${classMap({
               'group-header': true,
               'group-active': hasActiveChild,
+              'group-header--clickable': true,
+              'group-header--focused': this.focusedItem?.kind === 'pinned',
             })}
+            data-group-name="__pinned__"
+            role="button"
+            tabindex="0"
+            @click=${() => {
+              this.pinnedCollapsed = !this.pinnedCollapsed;
+              localStorage.setItem(
+                'editorsPanel.pinnedCollapsed',
+                this.pinnedCollapsed.toString(),
+              );
+            }}
+            @keydown=${(e: KeyboardEvent) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                this.pinnedCollapsed = !this.pinnedCollapsed;
+                localStorage.setItem(
+                  'editorsPanel.pinnedCollapsed',
+                  this.pinnedCollapsed.toString(),
+                );
+              }
+            }}
           >
-            <oscd-icon class="group-header-icon">push_pin</oscd-icon>
+            <span class="shortcut-badge-container"
+              ><oscd-icon class="group-header-icon">push_pin</oscd-icon
+              >${pinnedShortcut
+                ? EditorPluginsPanel.renderShortcutBadge(pinnedShortcut.key)
+                : nothing}</span
+            >
             <span class="group-name">${msg('Pinned')}</span>
+            <oscd-icon class="group-collapse-chevron"
+              >${isCollapsed ? 'expand_more' : 'expand_less'}</oscd-icon
+            >
           </div>
-          <div class="group-divider"></div>
-          ${flatPlugins.map(({ plugin, flatIndex }) =>
-            this.renderPluginItem(plugin, flatIndex, {
-              inGroup: true,
-              inPinnedGroup: true,
-            }),
-          )}
+          ${isCollapsed
+            ? nothing
+            : html`
+                <div class="group-divider"></div>
+                ${flatPlugins.map(({ plugin, flatIndex }, i) =>
+                  this.renderPluginItem(plugin, flatIndex, {
+                    inGroup: true,
+                    inPinnedGroup: true,
+                    groupPosition: i,
+                  }),
+                )}
+              `}
         </div>
       `;
     }
 
     const isHovered = this.hoveredGroupName === PINNED_GROUP_KEY;
+    const activeChildIndex = hasActiveChild
+      ? flatPlugins.findIndex(({ flatIndex }) => flatIndex === this.editorIndex)
+      : -1;
     return html`
       <div
         class=${classMap({
           'group-container': true,
           'group-container--inactive': !hasActiveChild,
+          'group-container--collapsed-active': hasActiveChild,
           'group-container--hovered': isHovered,
         })}
         @mouseenter=${(e: MouseEvent) =>
@@ -312,8 +1074,24 @@ export class EditorPluginsPanel extends ScopedElementsMixin(LitElement) {
             'group-active': hasActiveChild,
           })}
         >
-          <oscd-icon class="group-header-icon">push_pin</oscd-icon>
+          <span class="shortcut-badge-container"
+            ><oscd-icon class="group-header-icon">push_pin</oscd-icon
+            >${pinnedShortcut
+              ? EditorPluginsPanel.renderShortcutBadge(pinnedShortcut.key)
+              : nothing}</span
+          >
         </div>
+        ${activeChildIndex >= 0
+          ? this.renderPluginItem(
+              flatPlugins[activeChildIndex].plugin,
+              flatPlugins[activeChildIndex].flatIndex,
+              {
+                inGroup: true,
+                inPinnedGroup: true,
+                groupPosition: activeChildIndex,
+              },
+            )
+          : nothing}
       </div>
     `;
   }
@@ -321,70 +1099,151 @@ export class EditorPluginsPanel extends ScopedElementsMixin(LitElement) {
   private renderGroup(
     group: ResolvedPluginGroup,
     flatStart: number,
+    searchFilter?: string,
   ): TemplateResult {
     const label = this.pluginLabel(group);
-    // Only highlight this group when the user selected from within it (not from the pinned group)
     const hasActiveChild =
       !this.activeFromPinned &&
       group.plugins.some((_, i) => flatStart + i === this.editorIndex);
 
+    const groupShortcut =
+      this.showShortcuts && this.activeShortcutGroup === null
+        ? this.shortcutMap.find(s => s.groupName === group.name)
+        : this.activeShortcutGroup !== null
+          ? this.shortcutMap.find(
+              s =>
+                s.key === this.activeShortcutGroup &&
+                s.groupName === group.name,
+            )
+          : undefined;
+
     if (this.expanded) {
+      const isInShortcutGroup =
+        this.activeShortcutGroup !== null &&
+        this.shortcutMap.find(s => s.key === this.activeShortcutGroup)
+          ?.groupName === group.name;
+      const isCollapsed =
+        !this.isSearching &&
+        this.collapsedGroups.has(group.name) &&
+        !isInShortcutGroup;
       return html`
         <div
           class=${classMap({
             'group-container': true,
             'group-container--inactive': !hasActiveChild,
+            'group-container--collapsed': isCollapsed,
           })}
         >
           <div
             class=${classMap({
               'group-header': true,
               'group-active': hasActiveChild,
+              'group-header--clickable': true,
+              'group-header--focused':
+                this.focusedItem?.kind === 'group' &&
+                this.focusedItem.groupName === group.name,
             })}
+            data-group-name=${group.name}
+            role="button"
+            tabindex="0"
+            @click=${() => this.toggleGroupCollapse(group.name)}
+            @keydown=${(e: KeyboardEvent) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                this.toggleGroupCollapse(group.name);
+              }
+            }}
           >
-            <oscd-icon class="group-header-icon">${group.icon}</oscd-icon>
+            <span class="shortcut-badge-container"
+              ><oscd-icon class="group-header-icon">${group.icon}</oscd-icon
+              >${groupShortcut
+                ? EditorPluginsPanel.renderShortcutBadge(groupShortcut.key)
+                : nothing}</span
+            >
             <span class="group-name">${label}</span>
+            <oscd-icon class="group-collapse-chevron"
+              >${isCollapsed ? 'expand_more' : 'expand_less'}</oscd-icon
+            >
           </div>
-          <div class="group-divider"></div>
-          ${group.plugins.map((plugin, i) =>
-            this.renderPluginItem(plugin, flatStart + i, { inGroup: true }),
-          )}
+          ${isCollapsed
+            ? nothing
+            : html`
+                <div class="group-divider"></div>
+                ${group.plugins
+                  .filter((_, i) =>
+                    searchFilter
+                      ? EditorPluginsPanel.matchesSearch(
+                          this.pluginLabel(group.plugins[i]),
+                          searchFilter,
+                        )
+                      : true,
+                  )
+                  .map((plugin, filteredIdx) => {
+                    const originalIndex = searchFilter
+                      ? group.plugins.indexOf(plugin)
+                      : filteredIdx;
+                    return this.renderPluginItem(
+                      plugin,
+                      flatStart + originalIndex,
+                      {
+                        inGroup: true,
+                        groupPosition: originalIndex,
+                      },
+                    );
+                  })}
+              `}
         </div>
       `;
     }
 
     // Collapsed: group icon only. Hover → popup. Click → expand sidebar.
+    // When a child plugin is active, also show it below the group icon.
     const isHovered = this.hoveredGroupName === group.name;
+    const activeChildIndex = hasActiveChild
+      ? group.plugins.findIndex((_, i) => flatStart + i === this.editorIndex)
+      : -1;
     return html`
       <div
         class=${classMap({
           'group-container': true,
           'group-container--inactive': !hasActiveChild,
+          'group-container--collapsed-active': hasActiveChild,
           'group-container--hovered': isHovered,
         })}
-        role="button"
-        tabindex="0"
-        title=${label}
         @mouseenter=${(e: MouseEvent) =>
           this.showPopup(group.name, e.currentTarget as Element)}
         @mouseleave=${() => this.scheduleHidePopup()}
-        @click=${() => {
-          this.expanded = true;
-        }}
-        @keydown=${(e: KeyboardEvent) => {
-          if (e.key === 'Enter' || e.key === ' ') {
-            this.expanded = true;
-          }
-        }}
       >
         <div
           class=${classMap({
             'group-header-narrow': true,
             'group-active': hasActiveChild,
           })}
+          role="button"
+          tabindex="0"
+          title=${label}
+          @click=${() => {
+            this.expanded = true;
+          }}
+          @keydown=${(e: KeyboardEvent) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              this.expanded = true;
+            }
+          }}
         >
-          <oscd-icon class="group-header-icon">${group.icon}</oscd-icon>
+          <span class="shortcut-badge-container"
+            ><oscd-icon class="group-header-icon">${group.icon}</oscd-icon
+            >${groupShortcut
+              ? EditorPluginsPanel.renderShortcutBadge(groupShortcut.key)
+              : nothing}</span
+          >
         </div>
+        ${activeChildIndex >= 0
+          ? this.renderPluginItem(
+              group.plugins[activeChildIndex],
+              flatStart + activeChildIndex,
+              { inGroup: true, groupPosition: activeChildIndex },
+            )
+          : nothing}
       </div>
     `;
   }
@@ -475,14 +1334,121 @@ export class EditorPluginsPanel extends ScopedElementsMixin(LitElement) {
       return result;
     });
 
+    const filteredItems: TemplateResult[] = [];
+    if (this.isSearching) {
+      const q = this.searchQuery.trim().toLowerCase();
+      let idx = 0;
+      for (const item of this.editors) {
+        if (isPluginGroup(item)) {
+          const g = item as ResolvedPluginGroup;
+          const groupMatches = EditorPluginsPanel.matchesSearch(
+            this.pluginLabel(g),
+            q,
+          );
+          const flatStart = idx;
+          if (groupMatches) {
+            filteredItems.push(this.renderGroup(g, flatStart));
+          } else {
+            const matchingPlugins = g.plugins.filter(p =>
+              EditorPluginsPanel.matchesSearch(this.pluginLabel(p), q),
+            );
+            if (matchingPlugins.length > 0) {
+              filteredItems.push(this.renderGroup(g, flatStart, q));
+            }
+          }
+          idx += g.plugins.length;
+        } else {
+          const p = item as PluginEntry;
+          if (EditorPluginsPanel.matchesSearch(this.pluginLabel(p), q)) {
+            filteredItems.push(this.renderPluginItem(p, idx));
+          }
+          idx++;
+        }
+      }
+    }
+
     const pinnedPlugins = this.pinnedPluginsList;
 
     return html`
-      <div class="editors-list" role="tablist">
-        ${pinnedPlugins.length > 0
+      ${this.expanded
+        ? html`
+            <div class="panel-toolbar">
+              <div class="search-row">
+                <span class="shortcut-badge-container"
+                  ><oscd-icon class="search-icon">search</oscd-icon>${this
+                    .showShortcuts && this.activeShortcutGroup === null
+                    ? EditorPluginsPanel.renderShortcutBadge('F')
+                    : nothing}</span
+                >
+                <input
+                  ${ref(this.searchInputRef)}
+                  class="search-input"
+                  type="text"
+                  placeholder=${msg('Search plugins…')}
+                  .value=${this.searchQuery}
+                  @input=${(e: InputEvent) => {
+                    this.searchQuery = (e.target as HTMLInputElement).value;
+                    this.focusedItem = null;
+                  }}
+                  @keydown=${(e: KeyboardEvent) => {
+                    if (e.key === 'Escape') {
+                      this.searchQuery = '';
+                      this.focusedItem = null;
+                      this.collapseAfterSearchIfNeeded();
+                      (e.target as HTMLInputElement).blur();
+                    } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                      e.preventDefault();
+                      this.navigatePlugins(e.key);
+                    } else if (
+                      (e.key === 'Enter' || e.key === ' ') &&
+                      this.focusedItem !== null
+                    ) {
+                      e.preventDefault();
+                      this.confirmFocusedItem();
+                    }
+                  }}
+                />
+                ${this.isSearching
+                  ? html`<button
+                      class="search-clear"
+                      title=${msg('Clear search')}
+                      @click=${() => this.clearSearch()}
+                    >
+                      <oscd-icon>close</oscd-icon>
+                    </button>`
+                  : nothing}
+              </div>
+              ${this.hasGroups
+                ? html`
+                    <button
+                      class="collapse-all-btn"
+                      title=${this.allSectionsCollapsed
+                        ? msg('Expand all')
+                        : msg('Collapse all')}
+                      @click=${() => this.toggleAllGroups()}
+                    >
+                      <oscd-icon class="collapse-all-icon"
+                        >${this.allSectionsCollapsed
+                          ? 'unfold_more'
+                          : 'unfold_less'}</oscd-icon
+                      >
+                    </button>
+                  `
+                : nothing}
+            </div>
+          `
+        : nothing}
+      <div
+        class="editors-list"
+        role="tablist"
+        tabindex="0"
+        ${ref(this.editorsListRef)}
+        @keydown=${(e: KeyboardEvent) => this.handleEditorListKeyDown(e)}
+      >
+        ${pinnedPlugins.length > 0 && !this.isSearching
           ? this.renderPinnedGroup(pinnedPlugins)
           : nothing}
-        ${items}
+        ${this.isSearching ? filteredItems : items}
       </div>
       <div class="list-end-spacer"></div>
       <div class="footer">
@@ -715,9 +1681,22 @@ export class EditorPluginsPanel extends ScopedElementsMixin(LitElement) {
       );
     }
 
+    .plugin-item--focused {
+      outline: 2px solid var(--editor-plugins-panel-item-icon-color);
+      outline-offset: -2px;
+    }
+
     /* Indent children in expanded groups */
     :host([expanded]) .plugin-item--in-group {
       padding-left: calc(var(--editor-plugins-panel-item-leading-space) + 14px);
+    }
+
+    .plugin-item--shortcut-target {
+      background-color: color-mix(
+        in srgb,
+        var(--editor-plugins-panel-item-icon-color) 18%,
+        transparent
+      );
     }
 
     /* Active item inside a group container: subtle overlay */
@@ -853,6 +1832,25 @@ export class EditorPluginsPanel extends ScopedElementsMixin(LitElement) {
       );
     }
 
+    .group-container--collapsed {
+      margin: 1px 6px;
+    }
+
+    .group-container--collapsed .group-header {
+      border-radius: 8px;
+    }
+
+    .group-container--collapsed-active {
+      margin: 1px 4px;
+      background: color-mix(
+        in srgb,
+        var(--editor-plugins-panel-group-active-bg) 55%,
+        transparent
+      );
+      border-radius: 10px;
+      overflow-x: hidden;
+    }
+
     /* Highlight the group container when its hover popup is open */
     .group-container--hovered {
       background: color-mix(
@@ -885,6 +1883,33 @@ export class EditorPluginsPanel extends ScopedElementsMixin(LitElement) {
       flex-shrink: 0;
     }
 
+    .shortcut-badge-container {
+      position: relative;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+
+    .shortcut-badge {
+      position: absolute;
+      top: -4px;
+      right: -6px;
+      min-width: 14px;
+      height: 14px;
+      line-height: 14px;
+      padding: 0 3px;
+      border-radius: 4px;
+      background-color: var(--oscd-secondary, #2485e5);
+      color: var(--oscd-base3, #fff);
+      font-family: var(--oscd-text-font, Roboto);
+      font-size: 10px;
+      font-weight: 600;
+      text-align: center;
+      z-index: 2;
+      pointer-events: none;
+    }
+
     .group-active {
       background-color: var(--editor-plugins-panel-group-active-bg);
     }
@@ -897,6 +1922,168 @@ export class EditorPluginsPanel extends ScopedElementsMixin(LitElement) {
       white-space: nowrap;
       font-family: var(--oscd-text-font, Roboto);
       font-size: var(--md-list-item-label-text-size, 16px);
+    }
+
+    .group-header--clickable {
+      cursor: pointer;
+      border-radius: 8px;
+      transition: background-color 0.12s ease;
+    }
+
+    .group-header--clickable:hover {
+      background-color: color-mix(
+        in srgb,
+        var(--editor-plugins-panel-item-icon-color) 8%,
+        transparent
+      );
+    }
+
+    .group-header--focused {
+      outline: 2px solid var(--editor-plugins-panel-item-icon-color);
+      outline-offset: -2px;
+    }
+
+    .group-collapse-chevron {
+      --md-icon-size: 20px;
+      color: color-mix(
+        in srgb,
+        var(--editor-plugins-panel-item-icon-color) 55%,
+        transparent
+      );
+      flex-shrink: 0;
+      margin-left: auto;
+    }
+
+    /* ── Panel toolbar (search + collapse-all) ── */
+
+    .panel-toolbar {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      padding: 4px 6px;
+      flex-shrink: 0;
+      margin-top: calc(var(--editor-plugins-panel-padding-top) * -0.6);
+    }
+
+    .search-row {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 8px;
+      border-radius: 8px;
+      background: color-mix(
+        in srgb,
+        var(--editor-plugins-panel-item-icon-color) 10%,
+        transparent
+      );
+    }
+
+    .search-icon {
+      --md-icon-size: 18px;
+      color: color-mix(
+        in srgb,
+        var(--editor-plugins-panel-item-icon-color) 50%,
+        transparent
+      );
+      flex-shrink: 0;
+    }
+
+    .search-input {
+      flex: 1;
+      min-width: 0;
+      border: none;
+      outline: none;
+      background: transparent;
+      color: var(--editor-plugins-panel-item-text-color);
+      font-family: var(--oscd-text-font, Roboto);
+      font-size: 14px;
+      padding: 2px 0;
+    }
+
+    .search-input::placeholder {
+      color: color-mix(
+        in srgb,
+        var(--editor-plugins-panel-item-icon-color) 40%,
+        transparent
+      );
+    }
+
+    .search-clear {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 22px;
+      height: 22px;
+      border: none;
+      border-radius: 50%;
+      background: transparent;
+      cursor: pointer;
+      padding: 0;
+      flex-shrink: 0;
+      color: color-mix(
+        in srgb,
+        var(--editor-plugins-panel-item-icon-color) 55%,
+        transparent
+      );
+      --md-icon-size: 16px;
+      transition:
+        background-color 0.12s ease,
+        color 0.12s ease;
+    }
+
+    .search-clear:hover {
+      background-color: color-mix(
+        in srgb,
+        var(--editor-plugins-panel-item-icon-color) 15%,
+        transparent
+      );
+      color: var(--editor-plugins-panel-item-icon-color);
+    }
+
+    .collapse-all-btn {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 32px;
+      height: 32px;
+      border: none;
+      border-radius: 8px;
+      background: transparent;
+      cursor: pointer;
+      padding: 0;
+      flex-shrink: 0;
+      color: color-mix(
+        in srgb,
+        var(--editor-plugins-panel-item-icon-color) 50%,
+        transparent
+      );
+      --md-icon-size: 18px;
+      transition:
+        background-color 0.12s ease,
+        color 0.12s ease;
+    }
+
+    .collapse-all-btn:hover {
+      background-color: color-mix(
+        in srgb,
+        var(--editor-plugins-panel-item-icon-color) 10%,
+        transparent
+      );
+      color: var(--editor-plugins-panel-item-icon-color);
+    }
+
+    .collapse-all-icon {
+      --md-icon-size: 18px;
+      color: color-mix(
+        in srgb,
+        var(--editor-plugins-panel-item-icon-color) 50%,
+        transparent
+      );
+    }
+
+    .collapse-all-btn:hover .collapse-all-icon {
+      color: var(--editor-plugins-panel-item-icon-color);
     }
 
     /* ── Group header (collapsed sidebar) ── */

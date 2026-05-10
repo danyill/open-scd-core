@@ -1,4 +1,4 @@
-import { css, html, LitElement, nothing } from 'lit';
+import { css, html, LitElement, nothing, PropertyValues } from 'lit';
 import {
   customElement,
   property,
@@ -19,6 +19,7 @@ import {
   getLocale,
   LocaleTag,
   setLocale,
+  Translation,
   Translations,
 } from './localization.js';
 import { EditorPluginsPanel } from './side-panel/editor-plugins-panel.js';
@@ -178,7 +179,47 @@ export class OscdShell extends ScopedElementsMixin(LitElement) {
   }
 
   @state()
+  get breadcrumbGroupName(): string {
+    let fi = 0;
+    for (const item of this.plugins.editor) {
+      if ('plugins' in item) {
+        const g = item as ResolvedPluginGroup;
+        if (
+          this.editorIndex >= fi &&
+          this.editorIndex < fi + g.plugins.length
+        ) {
+          return g.translations?.[this.locale as Translation] ?? g.name;
+        }
+        fi += g.plugins.length;
+      } else {
+        if (fi === this.editorIndex) {
+          return '';
+        }
+        fi++;
+      }
+    }
+    return '';
+  }
+
+  @state()
+  get breadcrumbPluginName(): string {
+    const plugin = flattenEditors(this.plugins.editor)[this.editorIndex];
+    if (!plugin) {
+      return '';
+    }
+    return plugin.translations?.[this.locale as Translation] ?? plugin.name;
+  }
+
+  @state()
   private editorIndex = 0;
+
+  @state()
+  private panelExpanded = true;
+
+  @state()
+  private editorLoading = false;
+
+  private _editorLoadObserver: MutationObserver | null = null;
 
   @state()
   /** The `XMLDocument` currently being edited */
@@ -243,6 +284,12 @@ export class OscdShell extends ScopedElementsMixin(LitElement) {
     });
   }
 
+  updated(changed: PropertyValues) {
+    if (changed.has('editorIndex') || changed.has('editor')) {
+      this.checkEditorLoaded();
+    }
+  }
+
   connectedCallback() {
     super.connectedCallback();
 
@@ -266,6 +313,66 @@ export class OscdShell extends ScopedElementsMixin(LitElement) {
     this.removeEventListener('oscd-undo', this.handleUndo);
     this.removeEventListener('oscd-redo', this.handleRedo);
     this.removeEventListener('oscd-close', this.handleCloseDoc);
+
+    this._editorLoadObserver?.disconnect();
+    this._editorLoadObserver = null;
+  }
+
+  private checkEditorLoaded() {
+    if (!this.editor) {
+      this.editorLoading = false;
+      return;
+    }
+
+    const container = this.shadowRoot?.querySelector(
+      'section.editor-container',
+    );
+    if (!container) {
+      return;
+    }
+
+    const pluginEl = container.querySelector(this.editor) as HTMLElement | null;
+
+    // Already upgraded and has content — no loading needed
+    if (
+      pluginEl &&
+      pluginEl.shadowRoot &&
+      pluginEl.shadowRoot.childElementCount > 0
+    ) {
+      this.editorLoading = false;
+      return;
+    }
+
+    // Start loading indicator
+    this.editorLoading = true;
+
+    this._editorLoadObserver?.disconnect();
+
+    this._editorLoadObserver = new MutationObserver(() => {
+      const el = container.querySelector(this.editor) as HTMLElement | null;
+      if (el && el.shadowRoot && el.shadowRoot.childElementCount > 0) {
+        this.editorLoading = false;
+        this._editorLoadObserver?.disconnect();
+        this._editorLoadObserver = null;
+      }
+    });
+
+    if (pluginEl) {
+      this._editorLoadObserver.observe(pluginEl, {
+        childList: true,
+        subtree: true,
+        attributes: true,
+      });
+    }
+
+    // Fallback: stop loading after 2 seconds regardless
+    setTimeout(() => {
+      if (this.editorLoading) {
+        this.editorLoading = false;
+        this._editorLoadObserver?.disconnect();
+        this._editorLoadObserver = null;
+      }
+    }, 2000);
   }
 
   /*
@@ -452,6 +559,19 @@ export class OscdShell extends ScopedElementsMixin(LitElement) {
             this.onMenuPluginSelect(event)}
         ></plugins-menu>
 
+        ${!this.panelExpanded && this.breadcrumbPluginName
+          ? html`<span slot="alignStart" class="editor-breadcrumb">
+              ${this.breadcrumbGroupName
+                ? html`<span class="editor-breadcrumb-group"
+                      >${this.breadcrumbGroupName}</span
+                    ><span class="editor-breadcrumb-sep">›</span>`
+                : nothing}
+              <span class="editor-breadcrumb-plugin"
+                >${this.breadcrumbPluginName}</span
+              >
+            </span>`
+          : nothing}
+
         <files-menu
           slot="alignMiddle"
           .selectedDocName=${this.docName}
@@ -502,10 +622,20 @@ export class OscdShell extends ScopedElementsMixin(LitElement) {
             @editor-select=${(e: CustomEvent) => {
               this.editorIndex = e.detail.index;
             }}
+            @panel-expanded-change=${(e: CustomEvent) => {
+              this.panelExpanded = e.detail.expanded;
+            }}
           ></editor-plugins-panel>
         </section>
 
         <section class="editor-container">
+          ${this.editorLoading
+            ? html`
+                <div class="editor-loading">
+                  <div class="editor-loading-spinner"></div>
+                </div>
+              `
+            : nothing}
           ${this.editor ? this.renderPlugin(this.editor) : nothing}
         </section>
 
@@ -576,6 +706,58 @@ export class OscdShell extends ScopedElementsMixin(LitElement) {
         overflow: hidden;
         margin: 0;
         padding: 0;
+      }
+
+      .editor-breadcrumb {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        margin-left: 8px;
+        font-family: var(--oscd-text-font, Roboto);
+        font-size: 14px;
+        color: var(--oscd-shell-editor-breadcrumb-color, var(--oscd-secondary));
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      .editor-breadcrumb-group {
+        opacity: 0.7;
+      }
+
+      .editor-breadcrumb-sep {
+        opacity: 0.5;
+        margin: 0 2px;
+      }
+
+      .editor-breadcrumb-plugin {
+        font-weight: 500;
+      }
+
+      .editor-loading {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background-color: var(--editor-background-color);
+        z-index: 5;
+      }
+
+      .editor-loading-spinner {
+        width: 36px;
+        height: 36px;
+        border: 3px solid
+          color-mix(in srgb, var(--oscd-secondary, #2485e5) 25%, transparent);
+        border-top-color: var(--oscd-secondary, #2485e5);
+        border-radius: 50%;
+        animation: editor-load-spin 0.8s linear infinite;
+      }
+
+      @keyframes editor-load-spin {
+        to {
+          transform: rotate(360deg);
+        }
       }
     `,
   ];
