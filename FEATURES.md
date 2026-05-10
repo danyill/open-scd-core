@@ -23,7 +23,7 @@ Editors may be organized into named groups via `PluginGroup` objects in the `plu
 
 **Expanded rendering.** Group headers are clickable rows showing the group icon, name, and a chevron (`expand_more` / `expand_less`). Clicking toggles collapse state, persisted per group in `localStorage` under `editorsPanel.collapsedGroups` (a JSON-serialised `Set`).
 
-**Collapsed rendering.** When the sidebar is collapsed, each group shows only its icon. If the active plugin belongs to the group, the group icon and active plugin icon are both displayed. Hovering a collapsed group shows a popup with the group's plugins; clicking any popup item selects it and expands the sidebar.
+**Collapsed rendering.** When the sidebar is collapsed, each group shows only its icon. If the active plugin belongs to the group, the group icon and active plugin icon are both displayed. Hovering a collapsed group shows a popup with the group's plugins; clicking a popup item selects it but does not expand the sidebar.
 
 ### Collapse-All Button
 
@@ -59,6 +59,7 @@ The `levenshteinAtMost1(a, b)` method computes this with an early-exit optimised
 - All matching groups are force-expanded (their collapsed state is overridden).
 - Selecting a plugin clears the search query.
 - The search input supports Arrow Up/Down to navigate results and Enter/Space to confirm selection.
+- Pressing Enter with no focused item: if exactly one search result exists, selects it immediately; if multiple results exist, focuses the first result.
 
 ---
 

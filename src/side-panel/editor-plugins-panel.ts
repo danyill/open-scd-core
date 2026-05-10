@@ -1399,12 +1399,26 @@ export class EditorPluginsPanel extends ScopedElementsMixin(LitElement) {
                     } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
                       e.preventDefault();
                       this.navigatePlugins(e.key);
-                    } else if (
-                      (e.key === 'Enter' || e.key === ' ') &&
-                      this.focusedItem !== null
-                    ) {
+                    } else if (e.key === 'Enter' || e.key === ' ') {
                       e.preventDefault();
-                      this.confirmFocusedItem();
+                      if (this.focusedItem !== null) {
+                        this.confirmFocusedItem();
+                      } else if (this.isSearching) {
+                        const items = this.visibleNavigableItems;
+                        if (items.length === 1) {
+                          const item = items[0];
+                          if (item.kind === 'plugin') {
+                            this.selectEditor(
+                              item.plugin,
+                              item.flatIndex,
+                              false,
+                            );
+                          }
+                        } else if (items.length > 1) {
+                          this.focusedItem = items[0];
+                          this.scrollFocusedIntoView();
+                        }
+                      }
                     }
                   }}
                 />
