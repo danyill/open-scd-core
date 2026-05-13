@@ -1,0 +1,84 @@
+import { LitElement, TemplateResult } from 'lit';
+import { OscdIcon } from '@omicronenergy/oscd-ui/icon/OscdIcon.js';
+import { OscdIconButton } from '@omicronenergy/oscd-ui/iconbutton/OscdIconButton.js';
+import { LocaleTag } from '../localization.js';
+import { EditorPluginEntry } from '../oscd-shell.js';
+declare global {
+    interface HTMLElementTagNameMap {
+        'editor-plugins-panel': EditorPluginsPanel;
+    }
+}
+declare const EditorPluginsPanel_base: typeof LitElement & import("@open-wc/scoped-elements/lit-element.js").ScopedElementsHostConstructor;
+export declare class EditorPluginsPanel extends EditorPluginsPanel_base {
+    static scopedElements: {
+        'oscd-icon': typeof OscdIcon;
+        'oscd-icon-button': typeof OscdIconButton;
+    };
+    editors: EditorPluginEntry[];
+    editorIndex: number;
+    locale: LocaleTag;
+    private pinnedPluginKeys;
+    private activeFromPinned;
+    private hoveredGroupName;
+    private hoveredRect;
+    private collapsedGroups;
+    private pinnedCollapsed;
+    private searchQuery;
+    private showShortcuts;
+    private activeShortcutGroup;
+    private shortcutNumberBuffer;
+    private focusedItem;
+    private _shortcutConfirmTimer;
+    private searchInputRef;
+    private editorsListRef;
+    private _hoverTimer;
+    private isExpanded;
+    get expanded(): boolean;
+    set expanded(value: boolean);
+    disconnectedCallback(): void;
+    private resetShortcuts;
+    private collapseAfterSearchIfNeeded;
+    private _wasCollapsedForShortcut;
+    private _wasCollapsedForSearch;
+    private confirmShortcutSelection;
+    private navigatePlugins;
+    private confirmFocusedItem;
+    private navigableItemsEqual;
+    private handleEditorListKeyDown;
+    private scrollFocusedIntoView;
+    private handleKeyDown;
+    private handleKeyUp;
+    private handleOutsideClick;
+    connectedCallback(): void;
+    private pluginKey;
+    private get allFlatPlugins();
+    private get pinnedPluginsList();
+    private getGroupFlatPlugins;
+    private get visibleNavigableItems();
+    private togglePluginPin;
+    private toggleExpanded;
+    private get hasGroups();
+    private get allSectionsCollapsed();
+    private toggleGroupCollapse;
+    private toggleAllGroups;
+    private clearSearch;
+    private get shortcutMap();
+    private static renderShortcutBadge;
+    private static levenshteinAtMost1;
+    private static matchesSearch;
+    private get filteredEditors();
+    private get isSearching();
+    private showPopup;
+    private scheduleHidePopup;
+    private cancelHidePopup;
+    private pluginLabel;
+    private selectEditor;
+    private renderPluginIcon;
+    private renderPluginItem;
+    private renderPinnedGroup;
+    private renderGroup;
+    private renderHoverPopup;
+    render(): TemplateResult<1>;
+    static styles: import("lit").CSSResult;
+}
+export {};
